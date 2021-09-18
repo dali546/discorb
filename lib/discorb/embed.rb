@@ -15,20 +15,20 @@ module Discorb
     attr_accessor :timestamp
     # @return [Discorb::Color, nil] The color of embed.
     attr_accessor :color
-    # @return [Discorb::Embed::Author, nil] The author of embed.
-    attr_accessor :author
     # @return [Array<Discorb::Embed::Field>] The fields of embed.
     attr_accessor :fields
-    # @return [Discorb::Embed::Footer, nil] The footer of embed.
-    attr_accessor :footer
     # @return [Symbol] The type of embed.
     attr_reader :type
-    attr_reader :image, :thumbnail
+    attr_reader :image, :thumbnail, :author, :footer
 
     # @!attribute [rw] image
     #   @return [Discorb::Embed::Image] The image of embed.
     # @!attribute [rw] thumbnail
     #   @return [Discorb::Embed::Thumbnail] The thumbnail of embed.
+    # @!attribute [rw] author
+    #   @return [Discorb::Embed::Author] The author field of embed.
+    # @!attribute [rw] footer
+    #  @return [Discorb::Embed::Footer] The footer of embed.
 
     #
     # Initialize a new Embed object.
@@ -79,11 +79,19 @@ module Discorb
     end
 
     def image=(value)
-      @image = (value.is_a?(String)) ? Image.new(value) : value
+      @image = (value.respond_to?(:to_s)) ? Image.new(value) : value
     end
 
     def thumbnail=(value)
-      @thumbnail = (value.is_a?(String)) ? Thumbnail.new(value) : value
+      @thumbnail = (value.respond_to?(:to_s)) ? Thumbnail.new(value) : value
+    end
+
+    def author=(value)
+      @author = (value.respond_to?(:to_s)) ? Author.new(value) : value
+    end
+
+    def footer=(value)
+      @footer = (value.respond_to?(:to_s)) ? Footer.new(value) : value
     end
 
     #
