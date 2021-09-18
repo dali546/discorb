@@ -15,3 +15,7 @@ group :docs, optional: true do
   gem "redcarpet"
   gem "yard", "~> 0.9.26"
 end
+
+group :test do
+  gem "rspec", "~> 3.10"
+end
