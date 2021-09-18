@@ -105,22 +105,22 @@ RSpec.describe "Discorb::Embed" do
 
       it "success in image" do
         embed = Discorb::Embed.new
-        embed.image = "Image"
+        embed.image = "https://example.com"
         expect(embed.image).to be_a(Discorb::Embed::Image)
         expect(embed.image.to_hash).to eq(
           {
-            url: "Image",
+            url: "https://example.com",
           }
         )
       end
 
       it "success in thumbnail" do
         embed = Discorb::Embed.new
-        embed.thumbnail = "Thumbnail"
+        embed.thumbnail = "https://example.com"
         expect(embed.thumbnail).to be_a(Discorb::Embed::Thumbnail)
         expect(embed.thumbnail.to_hash).to eq(
           {
-            url: "Thumbnail",
+            url: "https://example.com",
           }
         )
       end
