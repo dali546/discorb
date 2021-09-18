@@ -111,7 +111,7 @@ module Discorb
     # @return [Discorb::Color] A color object.
     #
     def self.from_hex(hex)
-      new(hex.to_i(16))
+      new(hex.delete_prefix("#").to_i(16))
     end
 
     #
