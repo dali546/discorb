@@ -82,7 +82,7 @@ module Discorb
       if @raw_value.key?(name)
         @raw_value[name]
       elsif name.end_with?("=") && @raw_value.key?(name[0..-2].to_sym)
-        raise ArgumentError, "true/false expected" if (!args.is_a? TrueClass) || args.is_a?(FalseClass)
+        raise ArgumentError, "true/false expected" unless args.is_a? TrueClass or args.is_a?(FalseClass)
 
         @raw_value[name[0..-2].to_sym] = args
       else
@@ -108,6 +108,10 @@ module Discorb
       "#<#{self.class} value=#{value}>"
     end
 
+    def to_h
+      @raw_value
+    end
+
     class << self
       # Create new intent object from raw value.
       # @param value [Integer] The value of the intent.
@@ -121,12 +125,12 @@ module Discorb
 
       # Create new intent object with default values.
       def default
-        from_value(32_509)
+        from_value(32509)
       end
 
       # Create new intent object with all intents.
       def all
-        from_value(32_767)
+        from_value(32767)
       end
 
       # Create new intent object with no intents.

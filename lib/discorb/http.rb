@@ -221,7 +221,7 @@ module Discorb
           { "User-Agent" => USER_AGENT, "authorization" => "Bot #{@client.token}",
             "content-type" => "application/json" }
         end
-      ret.merge(headers) if !headers.nil? && headers.length.positive?
+      ret.merge!(headers) if !headers.nil? && headers.length.positive?
       ret["X-Audit-Log-Reason"] = audit_log_reason unless audit_log_reason.nil?
       ret
     end
@@ -242,12 +242,13 @@ module Discorb
         else
           API_BASE_URL + path
         end
-      URI(full_path).path
+      uri = URI(full_path)
+      full_path.sub(uri.scheme + "://" + uri.host, "")
     end
 
     def get_response_data(resp)
-      if resp["Via"].nil?
-        raise CloudFlareBanError.new(@client, resp)
+      if resp["Via"].nil? && resp.code == "429"
+        raise CloudFlareBanError.new(resp, @client)
       end
       rd = resp.body
       if rd.nil? || rd.empty?

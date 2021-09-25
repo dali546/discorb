@@ -214,6 +214,55 @@ module Discorb
     end
 
     #
+    # Removes the mentions from the message.
+    #
+    # @param [Boolean] user Whether to clean user mentions.
+    # @param [Boolean] channel Whether to clean channel mentions.
+    # @param [Boolean] role Whether to clean role mentions.
+    # @param [Boolean] emoji Whether to clean emoji.
+    # @param [Boolean] everyone Whether to clean `@everyone` and `@here`.
+    # @param [Boolean] codeblock Whether to clean codeblocks.
+    #
+    # @return [String] The cleaned content of the message.
+    #
+    def clean_content(user: true, channel: true, role: true, emoji: true, everyone: true, codeblock: false)
+      ret = @content.dup
+      ret.gsub!(/<@!?(\d+)>/) do |match|
+        member = guild&.members&.[]($1)
+        member ||= @client.users[$1]
+        member ? "@#{member.name}" : "@Unknown User"
+      end if user
+      ret.gsub!(/<#(\d+)>/) do |match|
+        channel = @client.channels[$1]
+        channel ? "<##{channel.id}>" : "#Unknown Channel"
+      end
+      ret.gsub!(/<@&(\d+)>/) do |match|
+        role = guild&.roles&.[]($1)
+        role ? "@#{role.name}" : "@Unknown Role"
+      end if role
+      ret.gsub!(/<a?:([a-zA-Z0-9_]+):\d+>/) do |match|
+        $1
+      end if emoji
+      ret.gsub!(/@(everyone|here)/, "@\u200b\\1") if everyone
+      unless codeblock
+        codeblocks = ret.split("```", -1)
+        original_codeblocks = @content.scan(/```(.+?)```/m)
+        res = []
+        max = codeblocks.length
+        codeblocks.each_with_index do |codeblock, i|
+          if max % 2 == 0 && i == max - 1 or i.even?
+            res << codeblock
+          else
+            res << original_codeblocks[i / 2]
+          end
+        end
+        res.join("```")
+      else
+        ret
+      end
+    end
+
+    #
     # Edit the message.
     #
     # @param [String] content The message content.
@@ -522,11 +571,11 @@ module Discorb
       if data[:member].nil? && data[:webhook_id]
         @webhook_id = Snowflake.new(data[:webhook_id])
         @author = Webhook::Message::Author.new(data[:author])
-      elsif data[:guild_id].nil? || data[:guild_id].empty?
+      elsif data[:guild_id].nil? || data[:guild_id].empty? || data[:member].nil?
         @author = @client.users[data[:author][:id]] || User.new(@client, data[:author])
       else
-        @author = guild.members[data[:author][:id]] || Member.new(@client,
-                                                                  @guild_id, data[:author], data[:member])
+        @author = guild&.members&.get(data[:author][:id]) || Member.new(@client,
+                                                                        @guild_id, data[:author], data[:member])
       end
       @content = data[:content]
       @created_at = Time.iso8601(data[:timestamp])

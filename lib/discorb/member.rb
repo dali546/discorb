@@ -59,6 +59,8 @@ module Discorb
     # @!attribute [r] status
     #   @macro client_cache
     #   @return [Symbol] The status of the member. It's from the {#presence}.
+    # @!attribute [r] owner?
+    #   @return [Boolean] Whether the member is the owner of the guild.
 
     # @!visibility private
     def initialize(client, guild_id, user_data, member_data)
@@ -99,17 +101,26 @@ module Discorb
       guild.voice_states[@id]
     end
 
+    def owner?
+      guild.owner_id == @id
+    end
+
     def guild
       @client.guilds[@guild_id]
     end
 
     def roles
-      @role_ids.map { |r| guild.roles[r] }
+      @role_ids.map { |r| guild.roles[r] }.sort_by(&:position).reverse + [guild.roles[guild.id]]
     end
 
     def permissions
+      if owner?
+        return Permission.new((1 << 38) - 1)
+      end
       roles.map(&:permissions).sum(Permission.new(0))
     end
+
+    alias guild_permissions permissions
 
     def hoisted_role
       @hoisted_role_id && guild.roles[@hoisted_role_id]
@@ -234,7 +245,7 @@ module Discorb
       @custom_avatar = member_data[:avatar] && Asset.new(member_data[:avatar])
       super(user_data)
       @display_avatar = @avatar || @custom_avatar
-      @client.guilds[@guild_id].members[@id] = self unless @guild_id.nil?
+      @client.guilds[@guild_id].members[@id] = self unless @guild_id.nil? || @client.guilds[@guild_id].nil?
       @_member_data.update(member_data)
     end
   end

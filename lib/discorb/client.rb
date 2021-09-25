@@ -5,6 +5,7 @@ require "logger"
 
 require "async"
 require "async/websocket/client"
+require_relative "./utils/colored_puts"
 
 module Discorb
   #
@@ -64,11 +65,14 @@ module Discorb
     # @param [Boolean] colorize_log Whether to colorize the log.
     # @param [:debug, :info, :warn, :error, :critical] log_level The log level.
     # @param [Boolean] wait_until_ready Whether to delay event dispatch until ready.
+    # @param [Boolean] fetch_member Whether to fetch member on ready. This may slow down the client. Default to `false`.
+    # @param [String] title The title of the process. `false` to default, `nil` to `discorb: User#0000`. Default to `nil`.
     #
     def initialize(
       allowed_mentions: nil, intents: nil, message_caches: 1000,
       log: nil, colorize_log: false, log_level: :info,
-      wait_until_ready: true
+      wait_until_ready: true, fetch_member: false,
+      title: nil
     )
       @allowed_mentions = allowed_mentions || AllowedMentions.new(everyone: true, roles: true, users: true)
       @intents = (intents or Intents.default)
@@ -91,6 +95,8 @@ module Discorb
       @commands = []
       @bottom_commands = []
       @status = :initialized
+      @fetch_member = fetch_member
+      @title = title
       set_default_events
     end
 
@@ -299,9 +305,15 @@ module Discorb
     #
     # @param [Discorb::Activity] activity The activity to update.
     # @param [:online, :idle, :dnd, :invisible] status The status to update.
+    # @param [String] afk Whether to set the client as AFK.
     #
-    def update_presence(activity = nil, status: nil)
-      payload = {}
+    def update_presence(activity = nil, status: nil, afk: false)
+      payload = {
+        activities: [],
+        status: status,
+        afk: nil,
+        since: nil,
+      }
       if !activity.nil?
         payload[:activities] = [activity.to_hash]
       end
@@ -405,7 +417,8 @@ module Discorb
       when "run"
         require "json"
         options = JSON.parse(ENV["DISCORB_CLI_OPTIONS"], symbolize_names: true)
-        Process.daemon if options[:daemon]
+        @daemon = options[:daemon]
+
         setup_commands(token) if options[:setup]
         if options[:log_level]
           if options[:log_level] == "none"
@@ -482,6 +495,13 @@ module Discorb
       on :error, override: true do |event_name, _args, e|
         message = "An error occurred while dispatching #{event_name}:\n#{e.full_message}"
         @log.error message, fallback: $stderr
+      end
+
+      once :standby do
+        next if @title == false
+
+        title = @title || ENV["DISCORB_CLI_TITLE"] || "discorb: #{@user}"
+        Process.setproctitle title
       end
     end
   end

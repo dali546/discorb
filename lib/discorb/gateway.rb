@@ -2,6 +2,7 @@
 
 require "async/http"
 require "async/websocket"
+require "async/barrier"
 require "json"
 require "zlib"
 
@@ -53,6 +54,12 @@ module Discorb
       attr_reader :member
       # @return [Discorb::UnicodeEmoji, Discorb::PartialEmoji] The emoji that was reacted with.
       attr_reader :emoji
+      # @macro client_cache
+      # @return [Discorb::Member, Discorb::User] The user or member who reacted.
+      attr_reader :fired_by
+
+      alias reactor fired_by
+      alias from fired_by
 
       # @!visibility private
       def initialize(client, data)
@@ -78,6 +85,8 @@ module Discorb
               @guild.members[data[:user_id]]
             end
         end
+
+        @fired_by = @member || @user || @client.users[data[:user_id]]
 
         @message = client.messages[data[:message_id]]
         @emoji = data[:emoji][:id].nil? ? UnicodeEmoji.new(data[:emoji][:name]) : PartialEmoji.new(data[:emoji])
@@ -355,6 +364,9 @@ module Discorb
     class TypingStartEvent < GatewayEvent
       # @return [Discorb::Snowflake] The ID of the channel the user is typing in.
       attr_reader :user_id
+      # @macro client_cache
+      # @return [Discorb::Member] The member that is typing.
+      attr_reader :member
 
       # @!attribute [r] channel
       #   @macro client_cache
@@ -365,6 +377,9 @@ module Discorb
       # @!attribute [r] user
       #   @macro client_cache
       #   @return [Discorb::User] The user that is typing.
+      # @!attribute [r] fired_by
+      #   @macro client_cache
+      #   @return [Discorb::Member, Discorb::User] The member or user that started typing.
 
       # @!visibility private
       def initialize(client, data)
@@ -388,6 +403,12 @@ module Discorb
       def guild
         @client.guilds[@guild_id]
       end
+
+      def fired_by
+        @member || user
+      end
+
+      alias from fired_by
     end
 
     #
@@ -468,7 +489,7 @@ module Discorb
           _, gateway_response = @http.get("/gateway").wait
           gateway_url = gateway_response[:url]
           endpoint = Async::HTTP::Endpoint.parse("#{gateway_url}?v=9&encoding=json&compress=zlib-stream",
-                                                alpn_protocols: Async::HTTP::Protocol::HTTP11.names)
+                                                 alpn_protocols: Async::HTTP::Protocol::HTTP11.names)
           begin
             Async::WebSocket::Client.connect(endpoint, headers: [["User-Agent", Discorb::USER_AGENT]], handler: RawConnection) do |connection|
               @connection = connection
@@ -477,9 +498,17 @@ module Discorb
               while (message = @connection.read)
                 @buffer << message
                 if message.end_with?((+"\x00\x00\xff\xff").force_encoding("ASCII-8BIT"))
-                  message = JSON.parse(@zlib_stream.inflate(@buffer), symbolize_names: true)
-                  @buffer = +""
-                  handle_gateway(message)
+                  begin
+                    data = @zlib_stream.inflate(@buffer)
+                    @buffer = +""
+                    message = JSON.parse(data, symbolize_names: true)
+                  rescue JSON::ParserError
+                    @buffer = +""
+                    @log.error "Received invalid JSON from gateway."
+                    @log.debug data
+                  else
+                    handle_gateway(message)
+                  end
                 end
               end
             end
@@ -490,7 +519,9 @@ module Discorb
               raise ClientError.new("Authentication failed."), cause: nil
             when "Discord WebSocket requesting client reconnect."
               @log.info "Discord WebSocket requesting client reconnect"
-              @tasks.map(&:stop)
+              connect_gateway(false)
+            else
+              @log.error "Discord WebSocket closed: #{e.message}"
               connect_gateway(false)
             end
           rescue EOFError, Async::Wrapper::Cancelled
@@ -502,7 +533,7 @@ module Discorb
       def send_gateway(opcode, **value)
         @connection.write({ op: opcode, d: value }.to_json)
         @connection.flush
-        @log.debug "Sent message with opcode #{opcode}: #{value.to_json.gsub(@token, "[Token]")}"
+        @log.debug "Sent message: #{{ op: opcode, d: value }.to_json.gsub(@token, "[Token]")}"
       end
 
       def handle_gateway(payload)
@@ -559,15 +590,18 @@ module Discorb
         end
       end
 
-      def handle_heartbeat(interval)
+      def handle_heartbeat
         Async do |task|
+          interval = @heartbeat_interval
           sleep((interval / 1000.0 - 1) * rand)
           loop do
-            @heartbeat_before = Time.now.to_f
-            @connection.write({ op: 1, d: @last_s }.to_json)
-            @connection.flush
-            @log.debug "Sent opcode 1."
-            @log.debug "Waiting for heartbeat."
+            unless @connection.closed?
+              @heartbeat_before = Time.now.to_f
+              @connection.write({ op: 1, d: @last_s }.to_json)
+              @connection.flush
+              @log.debug "Sent opcode 1."
+              @log.debug "Waiting for heartbeat."
+            end
             sleep(interval / 1000.0 - 1)
           end
         end
@@ -584,20 +618,18 @@ module Discorb
           @session_id = data[:session_id]
           @user = ClientUser.new(self, data[:user])
           @uncached_guilds = data[:guilds].map { |g| g[:id] }
-          if @uncached_guilds == []
-            @ready = true
-            dispatch(:ready)
-            @log.info("Guilds were cached")
+          if @uncached_guilds == [] or !@intents.guilds
+            ready
           end
-          @tasks << handle_heartbeat(@heartbeat_interval)
+          dispatch(:ready)
+          @tasks << handle_heartbeat
         when "GUILD_CREATE"
           if @uncached_guilds.include?(data[:id])
             Guild.new(self, data, true)
             @uncached_guilds.delete(data[:id])
             if @uncached_guilds == []
-              @ready = true
-              dispatch(:ready)
-              @log.info("Guilds were cached")
+              @log.debug "All guilds cached"
+              ready
             end
           elsif @guilds.has?(data[:id])
             @guilds[data[:id]].send(:_set_data, data)
@@ -819,12 +851,12 @@ module Discorb
           dispatch(:voice_state_update, old, current)
           if old&.channel != current&.channel
             dispatch(:voice_channel_update, old, current)
-            case [old&.channel, current&.channel]
-            in [nil, _]
+            case [old&.channel.nil?, current&.channel.nil?]
+            when [true, false]
               dispatch(:voice_channel_connect, current)
-            in [_, nil]
+            when [false, true]
               dispatch(:voice_channel_disconnect, old)
-            in _
+            when [false, false]
               dispatch(:voice_channel_move, old, current)
             end
           end
@@ -960,9 +992,9 @@ module Discorb
           dispatch(:reaction_add, ReactionEvent.new(self, data))
         when "MESSAGE_REACTION_REMOVE"
           if (target_message = @messages[data[:message_id]]) &&
-            (target_reaction = target_message.reactions.find do |r|
-              data[:emoji][:id].nil? ? r.emoji.name == data[:emoji][:name] : r.emoji.id == data[:emoji][:id]
-            end)
+             (target_reaction = target_message.reactions.find do |r|
+               data[:emoji][:id].nil? ? r.emoji.name == data[:emoji][:name] : r.emoji.id == data[:emoji][:id]
+             end)
             target_reaction.instance_variable_set(:@count, target_reaction.count - 1)
             target_message.reactions.delete(target_reaction) if target_reaction.count.zero?
           end
@@ -974,7 +1006,7 @@ module Discorb
           dispatch(:reaction_remove_all, ReactionRemoveAllEvent.new(self, data))
         when "MESSAGE_REACTION_REMOVE_EMOJI"
           if (target_message = @messages[data[:message_id]]) &&
-            (target_reaction = target_message.reactions.find { |r| data[:emoji][:id].nil? ? r.name == data[:emoji][:name] : r.id == data[:emoji][:id] })
+             (target_reaction = target_message.reactions.find { |r| data[:emoji][:id].nil? ? r.name == data[:emoji][:name] : r.id == data[:emoji][:id] })
             target_message.reactions.delete(target_reaction)
           end
           dispatch(:reaction_remove_emoji, ReactionRemoveEmojiEvent.new(data))
@@ -996,26 +1028,55 @@ module Discorb
           end
         end
       end
+
+      def ready
+        Async do
+          if @fetch_member
+            @log.debug "Fetching members"
+            barrier = Async::Barrier.new
+
+            @guilds.each do |guild|
+              barrier.async(parent: barrier) do
+                guild.fetch_members
+              end
+            end
+            barrier.wait
+          end
+          @ready = true
+          dispatch(:standby)
+          @log.info("Client is ready!")
+        end
+      end
     end
-    
+
     #
     # A class for connecting websocket with raw bytes data.
     # @private
     #
-    class RawConnection < Async::WebSocket::Connection		
-      def initialize(...)
+    class RawConnection < Async::WebSocket::Connection
+      def initialize(*, **)
         super
+        @closed = false
       end
-    
-			def parse(buffer)
-				# noop
+
+      def closed?
+        @closed
+      end
+
+      def close
+        super
+        @closed = true
+      end
+
+      def parse(buffer)
+        # noop
         buffer.to_s
-			end
-			
-			def dump(object)
-				# noop
+      end
+
+      def dump(object)
+        # noop
         object.to_s
-			end
+      end
     end
   end
 end
